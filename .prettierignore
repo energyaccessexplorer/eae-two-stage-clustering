@@ -1,0 +1,12 @@
+# Generated / vendored
+node_modules/
+coverage/
+package-lock.json
+# Machine-generated golden masters (owned by capture.mjs, not hand-formatted)
+**/golden.json
+
+# Files we do not own — never reformat these (spec is the source of truth,
+# the CSS is a sampled EAE asset, the HTML is the existing tool + bundled libs).
+index.html
+eae-design-tokens.css
+two_stage_clustering_spec_final.md

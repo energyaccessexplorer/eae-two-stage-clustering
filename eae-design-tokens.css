@@ -1,0 +1,52 @@
+/* Energy Access Explorer design tokens
+ * Sampled from the EAE interface screenshot. Secondary to engineering standards.
+ * Use these variables; do not hardcode colours in components.
+ * Category accent colours (demand, supply, etc.) can be extended below as needed.
+ */
+
+:root {
+  /* Brand */
+  --eae-green: #00794c; /* header bar, selected tab, section headers, primary actions */
+  --eae-green-dark: #016141; /* hover / pressed state for green */
+  --eae-green-tint: #e6f0eb; /* subtle green background wash */
+
+  /* Accent (EAE category highlight; "demand" renders coral in the UI) */
+  --eae-coral: #ff6767; /* accent / active category highlight */
+  --eae-coral-dark: #e85454; /* hover for coral */
+
+  /* Neutrals */
+  --eae-white: #ffffff; /* panels */
+  --eae-panel: #f4f4f4; /* panel / row background */
+  --eae-rail: #f8f8f8; /* left icon rail, light surfaces */
+  --eae-border: #dedede; /* borders, dividers, map base grey */
+  --eae-muted: #9da0a2; /* muted labels, disabled text, toggle tracks */
+
+  /* Text */
+  --eae-text: #2e3234; /* body text (dark neutral) */
+  --eae-text-on-green: #ffffff; /* text on the green header/tabs */
+  --eae-heading: var(--eae-green); /* section headings use brand green */
+
+  /* Typography (approximate; match EAE's actual stack once known) */
+  --eae-font-sans: 'Open Sans', 'Helvetica Neue', Arial, system-ui, sans-serif;
+  --eae-fs-heading: 14px; /* section headers, uppercase in EAE */
+  --eae-fs-body: 13px;
+  --eae-fs-small: 11px;
+
+  /* Spacing scale */
+  --eae-space-1: 4px;
+  --eae-space-2: 8px;
+  --eae-space-3: 12px;
+  --eae-space-4: 16px;
+
+  /* Radius / elevation */
+  --eae-radius: 3px; /* EAE uses tight, near-square corners */
+  --eae-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+/* Notes for the pass-2 UI:
+ * - Sub-area colouring is data-driven (absolute ability-to-pay ramp), NOT brand colour.
+ *   Use a neutral sequential ramp for values; reserve --eae-green / --eae-coral for chrome
+ *   (headers, buttons, active states), per spec section 3.8.
+ * - Do not use red-for-poor loaded schemes on the value ramp.
+ * - Section headers in EAE are uppercase, brand green, small; mirror that for new panels.
+ */
