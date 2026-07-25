@@ -9,29 +9,36 @@
  */
 
 /**
- * Copy an array to a Float64Array, mapping null/undefined to NaN.
+ * Copy an array into a fresh Float64Array, mapping null/undefined to NaN.
+ *
+ * Always allocates a new buffer, even when the source is already a Float64Array:
+ * encodePass2Request transfers these buffers to the worker, and transferring
+ * DETACHES them. Copying guarantees the caller's arrays — including any it reuses
+ * across runs (e.g. the pass-1 labels) — stay valid for the next call.
+ *
  * @param {number[]|Float64Array} arr source values
- * @returns {Float64Array} the source unchanged if already Float64Array, else a copy
+ * @returns {Float64Array} a new array (never the source)
  */
 function toFloat64(arr) {
-  return arr instanceof Float64Array ? arr : Float64Array.from(arr, (v) => (v == null ? NaN : v));
+  return Float64Array.from(arr, (v) => (v == null ? NaN : v));
 }
 
 /**
- * Copy an array to an Int32Array.
+ * Copy an array into a fresh Int32Array (always a new buffer; see {@link toFloat64}).
  * @param {number[]|Int32Array} arr source values
- * @returns {Int32Array} the source unchanged if already Int32Array, else a copy
+ * @returns {Int32Array} a new array (never the source)
  */
 function toInt32(arr) {
-  return arr instanceof Int32Array ? arr : Int32Array.from(arr);
+  return Int32Array.from(arr);
 }
 
 /**
  * Encode a pass-2 input into a worker message plus its transfer list.
  *
- * The returned typed arrays' buffers are listed for transfer (zero-copy): once posted,
- * the caller must not reuse the encoded arrays. Coordinates and labels are normalised
- * to typed arrays; ability/population become Float64Array with NaN for missing values.
+ * The input is copied into fresh typed arrays whose buffers are listed for transfer,
+ * so the caller's arrays are never detached and can be reused across runs. Coordinates
+ * and labels become typed arrays; ability/population become Float64Array with NaN for
+ * missing values.
  *
  * @param {object} input a {@link import('../subcluster/pass2.js').runPass2} input
  * @returns {{ message: object, transfer: ArrayBuffer[] }} the postMessage payload and

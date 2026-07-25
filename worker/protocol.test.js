@@ -19,6 +19,25 @@ describe('encodePass2Request', () => {
     expect(transfer).toHaveLength(5);
     expect(message.options).toEqual({});
   });
+
+  it('does not detach the caller arrays, so the same input can be encoded again', () => {
+    const px = new Float64Array([1, 2, 3, 4]);
+    const labels = new Int32Array([1, 1, -1, 1]);
+    const reused = {
+      px,
+      py: new Float64Array(4),
+      labels,
+      ability: [1, 2, null, 4],
+      population: [1, 1, 1, 1],
+    };
+    encodePass2Request(reused);
+    // A transferred buffer would report byteLength 0; these must stay intact.
+    expect(px.byteLength).toBe(32);
+    expect(labels.byteLength).toBe(16);
+    expect(px[0]).toBe(1);
+    // Encoding a second time (a re-run) must not throw on a detached buffer.
+    expect(() => encodePass2Request(reused)).not.toThrow();
+  });
 });
 
 describe('handlePass2', () => {
