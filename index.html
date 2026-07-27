@@ -90,6 +90,7 @@ import { splitClusterByAdmin } from './admin/split.js';
 import { absoluteView, bandRankFill, DEFAULT_THEME } from './render/style.js';
 import { absoluteLegendStops, bandRankLegend } from './render/legend.js';
 import { subareaLabel } from './render/labels.js';
+import { suggestEps1 } from './cluster/suggest-eps.js';
 
 /* ============================ UI (standalone) ============================ */
 /* Pass-1 core (cluster_features, merge_point_datasets) and the pass-2 modules are
@@ -115,7 +116,7 @@ const state = {
 	min_cluster_size: 25, min_samples: 10, max_link_km: 8,
 	cluster_weight: null, weight_floor: 0.1,
 	weights: [], filters: [], rank_by: null, show_pop: false,
-	pass2_view: false, pass2_color: 'absolute value', show_cluster_bounds: true, show_subcluster_bounds: true, pass2_bands: 5, pass2_min2: 4, pass2_eps2_km: null,   // pass-2 map + expert tuning
+	pass2_view: false, pass2_color: 'absolute value', show_cluster_bounds: true, show_subcluster_bounds: true, pass2_method: 'bands', pass2_region_count: 4, pass2_respat: 'dbscan', pass2_eps2_pct: 0.5, pass2_modality: false, pass2_bands: 5, pass2_min2: 4, pass2_eps2_km: null,   // pass-2 map + expert tuning
 };
 let LAST = null, SELECTED = null, T = null;
 
@@ -281,6 +282,7 @@ function renderControls() {
 		pb.innerHTML = '';
 		if (state.algorithm === 'dbscan') {
 			numField(pb, 'eps (km)', state.eps_km, 0.1, 0.1, v => state.eps_km = v);
+			btn(pb, 'suggest eps', '', () => { const e = suggestEps1(merge_point_datasets(store.datasets), state.min_pts); if (e != null) { state.eps_km = Math.round(e * 100) / 100; renderControls(); status('Suggested eps ≈ ' + state.eps_km + ' km (k-distance knee — a starting point, adjust as needed).'); } });
 			numField(pb, 'min_pts', state.min_pts, 1, 1, v => state.min_pts = v);
 			const tl = mk(pb, 'label', 'check'); const cb = mk(tl, 'input'); cb.type = 'checkbox'; cb.checked = state.weighted; cb.onchange = () => state.weighted = cb.checked;
 			tl.appendChild(document.createTextNode(' weighted (min_pop floors gate clusters)'));
@@ -338,10 +340,22 @@ function renderControls() {
 			const sbl = mk(p2b, 'label', 'check'); const sbb = mk(sbl, 'input'); sbb.type = 'checkbox'; sbb.checked = state.show_subcluster_bounds; sbb.disabled = !have;
 			sbb.onchange = () => { state.show_subcluster_bounds = sbb.checked; if (LAST) renderMap(); };
 			sbl.appendChild(document.createTextNode(' outline each sub-cluster (grouping boundaries)'));
-			numField(p2b, 'bands (max)', state.pass2_bands, 2, 1, v => { state.pass2_bands = Math.max(2, Math.round(v)); });
-			numField(p2b, 'min points per sub-cluster', state.pass2_min2, 2, 1, v => { state.pass2_min2 = Math.max(2, Math.round(v)); });
-			numField(p2b, 'eps2 km (0 = auto)', state.pass2_eps2_km || 0, 0, 0.1, v => { state.pass2_eps2_km = v > 0 ? v : null; });
-			hint(p2b, 'Fewer bands or a larger eps2 give fewer, larger sub-clusters. "Apply" re-runs pass 2 only.');
+			const ml = mk(p2b, 'label', 'field'); mk(ml, 'span').textContent = 'Pass-2 method';
+			ml.appendChild(sel(['bands', 'regions'], state.pass2_method, v => { state.pass2_method = v; renderControls(); }));
+			if (state.pass2_method === 'regions') {
+				numField(p2b, 'target regions', state.pass2_region_count, 2, 1, v => { state.pass2_region_count = Math.max(2, Math.round(v)); });
+				hint(p2b, 'Regions: contiguous groups of similar socio-economic value (fuses space + value). "Apply" re-runs pass 2.');
+			} else {
+				numField(p2b, 'bands (max)', state.pass2_bands, 2, 1, v => { state.pass2_bands = Math.max(2, Math.round(v)); });
+				numField(p2b, 'min points per sub-cluster', state.pass2_min2, 2, 1, v => { state.pass2_min2 = Math.max(2, Math.round(v)); });
+				numField(p2b, 'eps2 km (0 = auto)', state.pass2_eps2_km || 0, 0, 0.1, v => { state.pass2_eps2_km = v > 0 ? v : null; });
+				const rl = mk(p2b, 'label', 'field'); mk(rl, 'span').textContent = 'respatialise';
+				rl.appendChild(sel(['dbscan', 'hdbscan'], state.pass2_respat, v => { state.pass2_respat = v; }));
+				numField(p2b, 'eps2 percentile (0-1)', state.pass2_eps2_pct, 0, 0.05, v => { state.pass2_eps2_pct = Math.min(1, Math.max(0, v)); });
+				const gl = mk(p2b, 'label', 'check'); const gcb = mk(gl, 'input'); gcb.type = 'checkbox'; gcb.checked = state.pass2_modality; gcb.onchange = () => { state.pass2_modality = gcb.checked; };
+				gl.appendChild(document.createTextNode(' skip banding if values are smooth (modality guard)'));
+				hint(p2b, 'Fewer bands / larger eps2 / hdbscan give fewer, cleaner sub-clusters. "Apply" re-runs pass 2.');
+			}
 			const ab = btn(p2b, 'Apply to sub-areas', '', applyPass2); ab.disabled = !store.raster;
 			const db = btn(p2b, 'Download sub-areas GeoJSON', '', downloadGeoJSON); db.disabled = !(LAST && LAST.geojson);
 		}
@@ -492,14 +506,21 @@ async function runPass2Maybe() {
 	const project = make_projector(points), n = points.length;
 	const px = new Float64Array(n), py = new Float64Array(n);
 	const ability = new Array(n), population = new Array(n);
+	let abHit = 0, popHit = 0;
 	for (let i = 0; i < n; i++) {
 		const p = points[i], xy = project(p.lon, p.lat); px[i] = xy[0]; py[i] = xy[1];
 		const praw = popField.sample(p.lon, p.lat);
 		population[i] = praw == null ? null : (store.raster.is_density ? praw * popField.cell_area_km2(p.lat) : praw);
+		if (population[i] != null) popHit++;
 		ability[i] = abField ? abField.sample(p.lon, p.lat) : null;
+		if (ability[i] != null) abHit++;
 	}
+	// Total sampling failure almost always means the raster's CRS/extent does not match
+	// the points — warn instead of silently producing an empty (all-unknown) pass 2.
+	if (abField && abHit === 0) status('Warning: 0% of points got a socio-economic value — check that raster\'s CRS/extent matches the points.');
+	else if (popHit === 0) status('Warning: 0% of points got a population value — check the population raster\'s CRS/extent.');
 	let pass2;
-	try { pass2 = await runPass2InWorker({ px, py, labels: result.labels, ability, population, options: { min2: state.pass2_min2, eps2OverrideKm: state.pass2_eps2_km, banding: { maxBands: state.pass2_bands } } }); }
+	try { pass2 = await runPass2InWorker({ px, py, labels: result.labels, ability, population, options: { mode: state.pass2_method, min2: state.pass2_min2, eps2OverrideKm: state.pass2_eps2_km, eps2Percentile: state.pass2_eps2_pct, respatialiseMethod: state.pass2_respat, modalityGuard: state.pass2_modality, regionCount: state.pass2_region_count, banding: { maxBands: state.pass2_bands } } }); }
 	catch (e) { status('Pass 2 failed: ' + e.message); return; }
 	LAST.pass2 = pass2; LAST.px = px; LAST.py = py; LAST.ability = ability; LAST.population = population;
 	let admin = null;
@@ -509,13 +530,14 @@ async function runPass2Maybe() {
 		LAST.pointUnit = pointUnit;
 		LAST.straddles = clusterStraddles(pass2, pointUnit, store.admin);
 	}
+	const resolutionCeilingKm = store.ability ? (store.ability.is_geographic !== false ? Math.abs(store.ability.resolution[0]) * 111.32 : (Math.abs(store.ability.resolution[0]) * (store.ability.to_meter || 1)) / 1000) : null;
 	const meta = buildProvenance({
 		pass2,
 		abilityLayer: { id: store.ability ? 'ability-to-pay' : 'none', vintage: 'user-supplied' },
 		populationLayer: { id: 'population', vintage: 'user-supplied' },
 		adminDataset: store.admin ? { id: 'admin-boundaries', version: 'user-supplied' } : null,
 		pass1: { algorithm: state.algorithm, eps1Km: state.algorithm === 'dbscan' ? state.eps_km : null, min1: state.algorithm === 'dbscan' ? state.min_pts : null },
-		bandMode: 'default', sizeThreshold: Infinity,
+		bandMode: 'default', sizeThreshold: 1500, resolutionCeilingKm,
 		toolVersion: 'eae-pass2-0.1.0', pointCount: n, timestamp: new Date().toISOString(),
 	});
 	LAST.geojson = buildFeatureCollection({ pass2, points, meta, admin });

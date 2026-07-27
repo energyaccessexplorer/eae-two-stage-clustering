@@ -58,6 +58,15 @@ describe('buildProvenance', () => {
     ]);
   });
 
+  it('records the resolution ceiling caveat from the ability layer', () => {
+    const m = buildProvenance({ ...args, resolutionCeilingKm: 3.09 });
+    expect(m.caveats.resolutionCeilingKm).toBe(3.09);
+    expect(m.caveats.note).toMatch(/3\.09 km/);
+    // Defaults to null / "unknown" when not supplied.
+    expect(buildProvenance(args).caveats.resolutionCeilingKm).toBeNull();
+    expect(buildProvenance(args).caveats.note).toMatch(/unknown/);
+  });
+
   it('allows admin to be absent and distance method to be overridden', () => {
     const m = buildProvenance({ ...args, adminDataset: null, distanceMethod: 'haversine' });
     expect(m.layers.admin).toBeNull();

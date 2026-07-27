@@ -15,14 +15,18 @@ import { GridIndex } from '../geo/grid-index.js';
 /**
  * Median of a numeric array, computed on a sorted copy (input left untouched).
  * @param {Float64Array} values finite values, length >= 1
- * @returns {number} the median; the mean of the two central values when even
+ * @param {number} p quantile in [0, 1] (0.5 = median)
+ * @returns {number} the linearly-interpolated p-quantile
  */
-function median(values) {
+function quantile(values, p) {
   const sorted = Float64Array.from(values);
   sorted.sort();
   const n = sorted.length;
-  const mid = n >> 1;
-  return n % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  if (n === 1) return sorted[0];
+  const idx = (n - 1) * p;
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  return lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
 }
 
 /**
@@ -37,12 +41,16 @@ function median(values) {
  * @param {Float64Array} args.py y coordinates in metres, same order as `px`
  * @param {number[]} args.members indices into `px`/`py` of the cluster's with-data points
  * @param {number} args.min2 neighbour rank for the k-distance, k = min2 (>= 1)
+ * @param {number} [args.percentile=0.5] quantile of the per-point k-distances to use;
+ *   0.5 is the spec's median, a lower value (e.g. 0.3) yields a tighter radius that
+ *   over-connects dense bands less
  * @returns {number|null} `eps2` in **metres**, or null when the cluster has too few
  *   with-data points to have a min2-th neighbour (`members.length <= min2`), in which
  *   case the caller must skip respatialisation
- * @determinism Same members and min2 ⇒ identical `eps2`; independent of member order.
+ * @determinism Same members, min2, and percentile ⇒ identical `eps2`; independent of
+ *   member order.
  */
-export function deriveEps2({ px, py, members, min2 }) {
+export function deriveEps2({ px, py, members, min2, percentile = 0.5 }) {
   const nSub = members.length;
   if (nSub <= min2) return null;
 
@@ -72,5 +80,5 @@ export function deriveEps2({ px, py, members, min2 }) {
 
   const dists = new Float64Array(nSub);
   for (let i = 0; i < nSub; i++) dists[i] = index.kthNearestDist(i, min2);
-  return median(dists);
+  return quantile(dists, percentile);
 }

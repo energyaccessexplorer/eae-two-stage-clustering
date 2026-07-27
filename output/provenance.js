@@ -26,6 +26,8 @@
  * @param {number} args.sizeThreshold Fisher-Jenks→Ckmeans switch size (spec §3.2)
  * @param {string} [args.crs='EPSG:4326'] canonical CRS of the data
  * @param {string} [args.distanceMethod='projected-equirectangular'] clustering-distance method
+ * @param {number|null} [args.resolutionCeilingKm=null] the ability-to-pay layer's cell
+ *   size in km — the finest socio-economic contrast the output can resolve
  * @param {string} args.toolVersion tool version string
  * @param {number} args.pointCount number of input points
  * @param {string|number} args.timestamp caller-supplied generation time (ISO string or epoch)
@@ -42,6 +44,7 @@ export function buildProvenance(args) {
     sizeThreshold,
     crs = 'EPSG:4326',
     distanceMethod = 'projected-equirectangular',
+    resolutionCeilingKm = null,
     toolVersion,
     pointCount,
     timestamp,
@@ -52,6 +55,14 @@ export function buildProvenance(args) {
     pointCount,
     crs,
     clusteringDistanceMethod: distanceMethod,
+    caveats: {
+      resolutionCeilingKm,
+      note:
+        'Sub-areas cannot resolve socio-economic contrast finer than the input layer' +
+        ' grid cell (~' +
+        (resolutionCeilingKm == null ? 'unknown' : `${resolutionCeilingKm.toFixed(2)} km`) +
+        '). A coarse layer surfaces core-vs-periphery, not neighbourhood-scale pockets.',
+    },
     layers: {
       abilityToPay: abilityLayer,
       population: populationLayer,

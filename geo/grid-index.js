@@ -202,4 +202,64 @@ export class GridIndex {
     }
     return best.length ? Math.sqrt(best[best.length - 1]) : Infinity;
   }
+
+  /**
+   * The k nearest OTHER points to the point at index `i`.
+   *
+   * Ring-expands like {@link kthNearestDist} but returns the neighbour indices — the
+   * primitive for building a sparse adjacency graph (regionalization) without a full
+   * distance matrix. The query point itself is excluded.
+   *
+   * @param {number} i index of the query point in the arrays given to the constructor
+   * @param {number} k number of neighbours to return, k >= 1
+   * @returns {number[]} up to k indices of the nearest other points, nearest first
+   * @remarks Deterministic for a given index and k.
+   */
+  kNearest(i, k) {
+    const x = this.px[i],
+      y = this.py[i],
+      cx = this._c(x),
+      cy = this._c(y);
+    const best = []; // ascending by squared distance, entries { d2, j }, length <= k
+    const consider = (d2, j) => {
+      if (best.length < k) {
+        best.push({ d2, j });
+        let p = best.length - 1;
+        while (p > 0 && best[p - 1].d2 > best[p].d2) {
+          const t = best[p - 1];
+          best[p - 1] = best[p];
+          best[p] = t;
+          p--;
+        }
+      } else if (d2 < best[k - 1].d2) {
+        best[k - 1] = { d2, j };
+        let p = k - 1;
+        while (p > 0 && best[p - 1].d2 > best[p].d2) {
+          const t = best[p - 1];
+          best[p - 1] = best[p];
+          best[p] = t;
+          p--;
+        }
+      }
+    };
+    for (let r = 0; r <= this._max_ring; r++) {
+      for (let gx = cx - r; gx <= cx + r; gx++)
+        for (let gy = cy - r; gy <= cy + r; gy++) {
+          if (Math.max(Math.abs(gx - cx), Math.abs(gy - cy)) !== r) continue;
+          const b = this.bins.get(gx + ',' + gy);
+          if (!b) continue;
+          for (const j of b) {
+            if (j === i) continue;
+            const dx = this.px[j] - x,
+              dy = this.py[j] - y;
+            consider(dx * dx + dy * dy, j);
+          }
+        }
+      if (best.length === k) {
+        const inner = r * this.cell;
+        if (inner * inner > best[k - 1].d2) break;
+      }
+    }
+    return best.map((e) => e.j);
+  }
 }

@@ -16,6 +16,15 @@ describe('deriveEps2', () => {
     expect(deriveEps2({ px, py, members: [0, 1, 2, 3, 4], min2: 2 })).toBeCloseTo(1000, 9);
   });
 
+  it('honours the percentile option', () => {
+    const { px, py } = line5();
+    // 2nd-nearest distances sorted: [1000, 1000, 1000, 2000, 2000].
+    const members = [0, 1, 2, 3, 4];
+    expect(deriveEps2({ px, py, members, min2: 2, percentile: 0.5 })).toBeCloseTo(1000, 9);
+    expect(deriveEps2({ px, py, members, min2: 2, percentile: 1 })).toBeCloseTo(2000, 9);
+    expect(deriveEps2({ px, py, members, min2: 2, percentile: 0 })).toBeCloseTo(1000, 9);
+  });
+
   it('is independent of member order', () => {
     const { px, py } = line5();
     const ordered = deriveEps2({ px, py, members: [0, 1, 2, 3, 4], min2: 2 });

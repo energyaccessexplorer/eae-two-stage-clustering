@@ -22,8 +22,9 @@ export class RasterField {
    * @param {number} r.width columns
    * @param {number} r.height rows
    * @param {[number, number]} r.origin top-left corner in raster CRS units
-   * @param {[number, number]} r.resolution [rx, ry] cell size in raster CRS units;
-   *   ry is normally negative for a north-up grid
+   * @param {[number, number]} r.resolution [rx, ry] cell size in raster CRS units. The
+   *   sign is normalised to the GeoTIFF convention (rx > 0, ry < 0) on construction, so
+   *   a provider that ships a positive ry with a top-left origin still samples correctly
    * @param {number} r.nodata value meaning "no observation"
    * @param {boolean} [r.is_density] values are people per km² rather than per cell
    * @param {(lon: number, lat: number) => [number, number]} [r.to_xy] EPSG:4326 to raster
@@ -39,8 +40,13 @@ export class RasterField {
     this.h = r.height;
     this.ox = r.origin[0];
     this.oy = r.origin[1];
-    this.rx = r.resolution[0];
-    this.ry = r.resolution[1];
+    // Normalise to the GeoTIFF convention: origin is the top-left corner and rows run
+    // downward (rx > 0, ry < 0). readRasters returns row-major top-down data regardless
+    // of the resolution sign a provider records, so some files (e.g. the Meta RWI tiles)
+    // ship a POSITIVE ry with a top-left origin — which would drive row indices negative
+    // and read as "outside the raster". Forcing the sign keeps every lookup correct.
+    this.rx = Math.abs(r.resolution[0]);
+    this.ry = -Math.abs(r.resolution[1]);
     this.nodata = r.nodata;
     this.is_density = !!r.is_density;
     // CRS hooks: lon/lat -> raster XY and back. Identity when raster is 4326.

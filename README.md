@@ -6,6 +6,8 @@ clustering tool. Pass 1 (geography DBSCAN/HDBSCAN) is unchanged. Everything runs
 
 - **Entry page:** `index.html`
 - **Spec (source of truth):** `two_stage_clustering_spec_final.md`
+- **User docs:** `docs/USER_MANUAL.md` (plain-language guide) and
+  `docs/METHOD_AND_FINDINGS.md` (method, real-data findings, caveats).
 
 ## Method in one paragraph
 
@@ -16,6 +18,18 @@ sub-areas with DBSCAN. Population is **summed** per sub-area; ability-to-pay is 
 **population-weighted mean**, never summed. Pass-1 noise becomes a **last-mile** layer;
 points with no ability value become an **unknown** layer; neither is dropped. Admin
 boundaries are a human-in-the-loop overlay (highlight + optional split), never automatic.
+
+## Pass-2 methods (v2)
+
+`runPass2` (and the UI's _Pass-2 method_ selector) offers two approaches:
+
+- **`bands`** (default, spec-compliant §8) — band by value, then respatialise each band.
+  Respatialisation is `dbscan` (default) or the density-adaptive `hdbscan`; the derived
+  `eps2` radius uses a tunable k-distance percentile (`0.5` = median).
+- **`regions`** (opt-in) — SKATER-style regionalization: partition a cluster into a
+  target number of **contiguous, value-homogeneous regions**. This **deliberately fuses
+  geography and value**, which §8 forbids by default, so it is an explicit choice, never
+  the default (`region/regionalize.js`).
 
 ## Running
 

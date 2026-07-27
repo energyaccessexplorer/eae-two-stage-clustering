@@ -20,15 +20,17 @@ import { fisherJenks, ckmeans } from './breaks.js';
  *   treated as homogeneous. Default 0 fires the guard only on truly constant data;
  *   the operational value is a spec §7 open item to be tuned on real data.
  * @property {number} sizeThreshold with-data count above which the `ckmeans` path is
- *   used instead of Fisher-Jenks. Default Infinity (always Fisher-Jenks) until the
- *   spec §7 largest-cluster test sets a real threshold.
+ *   used instead of Fisher-Jenks. Both return the identical optimum; the switch only
+ *   bounds compute. Default 1500: real-data testing showed Fisher-Jenks (O(k·n²)) takes
+ *   ~10 s on a 33k-point cluster while Ckmeans (O(k·n log n)) takes ~17 ms with the same
+ *   breaks, and Fisher-Jenks stays under ~20 ms below 1500 (spec §7).
  */
 const DEFAULTS = {
   maxBands: 5,
   floor: 5,
   minBands: 2,
   varianceEps: 0,
-  sizeThreshold: Infinity,
+  sizeThreshold: 1500,
 };
 
 /**

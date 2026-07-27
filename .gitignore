@@ -3,3 +3,7 @@ coverage/
 *.log
 .DS_Store
 *.generated.mjs
+
+# local test data (large binaries, own licences) — keep only the README
+data/*
+!data/README.md

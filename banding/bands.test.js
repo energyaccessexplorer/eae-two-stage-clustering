@@ -123,6 +123,13 @@ describe('assignBands — band semantics', () => {
 });
 
 describe('assignBands — method selection', () => {
+  it('switches to ckmeans by default once a cluster exceeds the size threshold (1500)', () => {
+    const small = Array.from({ length: 1000 }, (_, i) => i);
+    const large = Array.from({ length: 1600 }, (_, i) => i);
+    expect(assignBands(small).method).toBe('fisher-jenks');
+    expect(assignBands(large).method).toBe('ckmeans');
+  });
+
   it('uses ckmeans above the size threshold and matches Fisher-Jenks', () => {
     const values = threeGroups(8);
     const jenks = assignBands(values, { floor: 5 });

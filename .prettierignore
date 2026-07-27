@@ -10,3 +10,6 @@ package-lock.json
 index.html
 eae-design-tokens.css
 two_stage_clustering_spec_final.md
+
+# Word documents (binary)
+*.docx

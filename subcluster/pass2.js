@@ -11,12 +11,26 @@
 
 import { NOISE } from '../cluster/labels.js';
 import { assignBands } from '../banding/bands.js';
+import { isUnimodal, UNIFORM_BC } from '../banding/modality.js';
 import { deriveEps2 } from './eps2.js';
-import { respatialiseBand } from './respatialise.js';
+import { respatialiseBand, respatialiseBandHdbscan } from './respatialise.js';
 import { weightedStats } from './stats.js';
+import { regionalize } from '../region/regionalize.js';
 
 /** Default pass-2 core threshold (spec leaves this open; resolved with the user). */
 const DEFAULT_MIN2 = 4;
+
+/** Default k-distance quantile for the derived `eps2` (0.5 = spec median). */
+const DEFAULT_EPS2_PERCENTILE = 0.5;
+
+/** HDBSCAN* candidate-edge cap, as a multiple of the derived `eps2`. */
+const HDBSCAN_LINK_FACTOR = 4;
+
+/** Default number of regions in regionalization mode. */
+const DEFAULT_REGION_COUNT = 4;
+
+/** Default bimodality-coefficient threshold for the (opt-in) modality guard. */
+const DEFAULT_MODALITY_THRESHOLD = UNIFORM_BC;
 
 /**
  * Run pass 2 over a clustered point set.
@@ -38,6 +52,17 @@ const DEFAULT_MIN2 = 4;
  * @param {number} [input.options.min2=4] pass-2 DBSCAN core threshold
  * @param {number} [input.options.eps2OverrideKm] expert-mode fixed `eps2` in km; when
  *   set, replaces the derived per-cluster value for every cluster
+ * @param {number} [input.options.eps2Percentile=0.5] quantile of the per-point
+ *   k-distances used for the derived `eps2` (lower ⇒ tighter, less over-connection)
+ * @param {'dbscan'|'hdbscan'} [input.options.respatialiseMethod='dbscan'] kernel used to
+ *   respatialise each band: fixed-radius DBSCAN, or density-adaptive HDBSCAN*
+ * @param {boolean} [input.options.modalityGuard=false] when true, a cluster whose values
+ *   are smooth (bimodality coefficient ≤ threshold) is reported as one gradient unit
+ *   instead of being banded (spec §7); off by default pending real-data validation
+ * @param {number} [input.options.modalityThreshold=5/9] bimodality-coefficient cut-off
+ *   for the guard (the uniform-distribution value)
+ * @param {'bands'|'regions'} [input.options.mode='bands'] pass-2 method (see below)
+ * @param {number} [input.options.regionCount=4] target regions when mode is 'regions'
  * @param {object} [input.options.banding] overrides forwarded to {@link assignBands}
  * @returns {{
  *   clusters: Array<object>,
@@ -58,6 +83,15 @@ export function runPass2(input) {
   }
   const min2 = options.min2 != null ? options.min2 : DEFAULT_MIN2;
   const eps2OverrideKm = options.eps2OverrideKm != null ? options.eps2OverrideKm : null;
+  const eps2Percentile =
+    options.eps2Percentile != null ? options.eps2Percentile : DEFAULT_EPS2_PERCENTILE;
+  const respatialiseMethod = options.respatialiseMethod === 'hdbscan' ? 'hdbscan' : 'dbscan';
+  const modalityGuard = options.modalityGuard === true;
+  const modalityThreshold =
+    options.modalityThreshold != null ? options.modalityThreshold : DEFAULT_MODALITY_THRESHOLD;
+  const mode = options.mode === 'regions' ? 'regions' : 'bands';
+  const regionCount = options.regionCount != null ? options.regionCount : DEFAULT_REGION_COUNT;
+  const regionKnn = options.regionKnn != null ? options.regionKnn : undefined;
   const banding = options.banding || {};
 
   // Group clustered points by parent id; collect pass-1 noise as the last-mile layer.
@@ -86,6 +120,13 @@ export function runPass2(input) {
       population,
       min2,
       eps2OverrideKm,
+      eps2Percentile,
+      respatialiseMethod,
+      modalityGuard,
+      modalityThreshold,
+      mode,
+      regionCount,
+      regionKnn,
       banding,
     })
   );
@@ -98,9 +139,15 @@ export function runPass2(input) {
       ...weightedStats(lastMile, ability, population),
     },
     params: {
+      mode,
       min2,
-      eps2Rule: eps2OverrideKm != null ? 'override' : 'median-min2-nn',
+      eps2Rule: eps2OverrideKm != null ? 'override' : `q${eps2Percentile}-min2-nn`,
       eps2OverrideKm,
+      eps2Percentile,
+      respatialiseMethod,
+      modalityGuard,
+      modalityThreshold: modalityGuard ? modalityThreshold : null,
+      regionCount: mode === 'regions' ? regionCount : null,
       banding,
     },
   };
@@ -114,7 +161,22 @@ export function runPass2(input) {
  * @returns {object} the cluster's pass-2 record (see the return of {@link runPass2})
  */
 function processCluster(parentClusterId, members, ctx) {
-  const { px, py, ability, population, min2, eps2OverrideKm, banding } = ctx;
+  const {
+    px,
+    py,
+    ability,
+    population,
+    min2,
+    eps2OverrideKm,
+    eps2Percentile,
+    respatialiseMethod,
+    modalityGuard,
+    modalityThreshold,
+    mode,
+    regionCount,
+    regionKnn,
+    banding,
+  } = ctx;
 
   const withData = [];
   const noData = [];
@@ -134,7 +196,43 @@ function processCluster(parentClusterId, members, ctx) {
     return { ...base, k: 0, method: 'none', flag: 'all-unknown', eps2Km: null, subAreas: [] };
   }
 
+  // Opt-in regionalization: contiguous value-homogeneous regions (fuses space + value).
+  if (mode === 'regions') {
+    return processRegions(parentClusterId, base, withData, {
+      px,
+      py,
+      ability,
+      population,
+      regionCount,
+      regionKnn,
+    });
+  }
+
   const values = Float64Array.from(withData, (m) => ability[m]);
+
+  // Modality guard (opt-in, spec §7): a smooth distribution is one gradient, not bands.
+  if (modalityGuard && isUnimodal(values, modalityThreshold)) {
+    return {
+      ...base,
+      k: 1,
+      method: 'single-unit',
+      flag: 'unimodal',
+      eps2Km: null,
+      subAreas: [
+        makeSubArea(
+          parentClusterId,
+          0,
+          valueRange(withData, ability),
+          false,
+          withData,
+          ability,
+          population,
+          1
+        ),
+      ],
+    };
+  }
+
   const banded = assignBands(values, banding);
 
   // Variance guard or insufficient points: report the cluster as one unit (spec step 5).
@@ -162,7 +260,7 @@ function processCluster(parentClusterId, members, ctx) {
   const eps2m =
     eps2OverrideKm != null
       ? eps2OverrideKm * 1000
-      : deriveEps2({ px, py, members: withData, min2 });
+      : deriveEps2({ px, py, members: withData, min2, percentile: eps2Percentile });
   const canSplit = eps2m != null && eps2m > 0;
 
   const subAreas = [];
@@ -179,6 +277,7 @@ function processCluster(parentClusterId, members, ctx) {
         population,
         eps2m,
         min2,
+        respatialiseMethod,
       });
     } else {
       // No usable eps2 (too few with-data points): the band is one sub-area, unsplit.
@@ -208,6 +307,93 @@ function processCluster(parentClusterId, members, ctx) {
 }
 
 /**
+ * Regionalize one cluster into contiguous, value-homogeneous regions (opt-in mode).
+ * Each region becomes a sub-area; a homogeneous or tiny cluster stays a single unit.
+ * @param {number} parentClusterId pass-1 cluster id
+ * @param {object} base shared fields (parentClusterId, hasUnknown, unknown)
+ * @param {number[]} withData with-data member indices
+ * @param {object} ctx px, py, ability, population, regionCount, regionKnn
+ * @returns {object} the cluster's pass-2 record with regions as sub-areas
+ */
+function processRegions(parentClusterId, base, withData, ctx) {
+  const { px, py, ability, population, regionCount, regionKnn } = ctx;
+  const [mn, mx] = valueRange(withData, ability);
+
+  // Homogeneous or too-small cluster: one region (no fabricated splits).
+  if (withData.length < 2 || mx - mn <= 0) {
+    return {
+      ...base,
+      k: 1,
+      method: 'regions',
+      flag: mx - mn <= 0 ? 'homogeneous' : null,
+      eps2Km: null,
+      subAreas: [regionSubArea(parentClusterId, 1, withData, ability, population)],
+    };
+  }
+
+  const regionLabels = regionalize({
+    px,
+    py,
+    values: ability,
+    members: withData,
+    targetRegions: regionCount,
+    knn: regionKnn,
+  });
+  const groups = new Map();
+  for (let i = 0; i < withData.length; i++) {
+    const r = regionLabels[i];
+    let g = groups.get(r);
+    if (!g) {
+      g = [];
+      groups.set(r, g);
+    }
+    g.push(withData[i]);
+  }
+  const subAreas = [...groups.keys()]
+    .sort((a, b) => a - b)
+    .map((r) => regionSubArea(parentClusterId, r, groups.get(r), ability, population));
+  return { ...base, k: subAreas.length, method: 'regions', flag: null, eps2Km: null, subAreas };
+}
+
+/**
+ * Build one region sub-area record (same shape as a band sub-area, so output/render
+ * treat it identically). `band` carries the region index for colouring only.
+ * @param {number} parentClusterId pass-1 cluster id
+ * @param {number} regionId region id counting from 1
+ * @param {number[]} members region member indices
+ * @param {Array<number|null>|Float64Array} ability value per point
+ * @param {Array<number|null>|Float64Array} population population per point
+ * @returns {object} sub-area record
+ */
+function regionSubArea(parentClusterId, regionId, members, ability, population) {
+  return {
+    subAreaId: `${parentClusterId}-r${regionId}`,
+    band: regionId - 1,
+    bandValueRange: valueRange(members, ability),
+    scattered: false,
+    ...weightedStats(members, ability, population),
+    memberIndices: members,
+  };
+}
+
+/**
+ * [min, max] of the finite values over a set of members.
+ * @param {number[]} members member indices
+ * @param {Array<number|null>|Float64Array} values value per point
+ * @returns {[number, number]} the range
+ */
+function valueRange(members, values) {
+  let mn = Infinity;
+  let mx = -Infinity;
+  for (const m of members) {
+    const v = values[m];
+    if (v < mn) mn = v;
+    if (v > mx) mx = v;
+  }
+  return [mn, mx];
+}
+
+/**
  * Respatialise one band's members and append its sub-areas (contiguous + scattered).
  * @param {object[]} subAreas output list to append to
  * @param {number} parentClusterId pass-1 cluster id
@@ -217,8 +403,18 @@ function processCluster(parentClusterId, members, ctx) {
  * @param {object} ctx arrays, `eps2m` (metres), and `min2`
  */
 function splitBand(subAreas, parentClusterId, band, range, bandMembers, ctx) {
-  const { px, py, ability, population, eps2m, min2 } = ctx;
-  const localLabels = respatialiseBand({ px, py, members: bandMembers, eps2m, min2 });
+  const { px, py, ability, population, eps2m, min2, respatialiseMethod } = ctx;
+  const localLabels =
+    respatialiseMethod === 'hdbscan'
+      ? respatialiseBandHdbscan({
+          px,
+          py,
+          members: bandMembers,
+          minClusterSize: min2,
+          minSamples: min2,
+          maxLinkM: eps2m * HDBSCAN_LINK_FACTOR,
+        })
+      : respatialiseBand({ px, py, members: bandMembers, eps2m, min2 });
 
   const groups = new Map();
   const scattered = [];

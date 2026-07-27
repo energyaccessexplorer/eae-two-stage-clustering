@@ -131,4 +131,39 @@ describe('pass-2 regression: planted-pocket recovery', () => {
       expect(nearest).toBeLessThan(TOL_KM);
     }
   });
+
+  it('also recovers the pockets with hdbscan respatialisation', () => {
+    const resH = runPass2({
+      px,
+      py,
+      labels: p1.labels,
+      ability: abilities,
+      population,
+      options: { respatialiseMethod: 'hdbscan' },
+    });
+    const cityH = resH.clusters.reduce(
+      (best, c) => {
+        const size = c.subAreas.reduce((n, s) => n + s.memberIndices.length, 0);
+        return size > best.size ? { size, c } : best;
+      },
+      { size: -1, c: null }
+    ).c;
+
+    const lowBand = cityH.subAreas.filter((s) => s.band === 0 && !s.scattered);
+    expect(lowBand.length).toBeGreaterThan(0);
+    const centroidsKm = lowBand.map((s) => {
+      let sx = 0;
+      let sy = 0;
+      for (const m of s.memberIndices) {
+        sx += px[m];
+        sy += py[m];
+      }
+      const n = s.memberIndices.length;
+      return [sx / n / 1000, sy / n / 1000];
+    });
+    for (const [pxk, pyk] of POCKETS) {
+      const nearest = Math.min(...centroidsKm.map(([cx, cy]) => Math.hypot(cx - pxk, cy - pyk)));
+      expect(nearest).toBeLessThan(2.0);
+    }
+  });
 });
